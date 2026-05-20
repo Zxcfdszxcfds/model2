@@ -1,178 +1,172 @@
-
 import streamlit as st
-from transformers import pipeline
-from nltk.translate.bleu_score import sentence_bleu, SmoothingFunction
+import numpy as np
+import matplotlib.pyplot as plt
+from PIL import Image
 
-# ---------------------- 页面配置 ----------------------
-st.set_page_config(
-    page_title="机器翻译对比与评测系统",
-    page_icon="🌐",
-    layout="wide"
-)
+st.set_page_config(page_title="图像滤波与频域变换平台", layout="wide")
+st.title("📷 图像滤波与频域变换实验（A2作业）")
 
+# ---------------------- 通用图片上传 ----------------------
+uploaded_file = st.file_uploader("上传一张图片（支持JPG/PNG）", type=["jpg", "png"], key="main_upload")
 
-# ---------------------- 缓存模型加载 ----------------------
-@st.cache_resource(show_spinner="正在加载翻译模型...")
-def load_translator():
-    """加载 Hugging Face 的英译中模型"""
-    translator = pipeline(
-        "translation_en_to_zh",
-        model="Helsinki-NLP/opus-mt-en-zh",
-        device=-1  # 使用 CPU，避免无 GPU 报错
-    )
-    return translator
+if uploaded_file:
+    img = Image.open(uploaded_file).convert("L")  # 转为灰度图，简化计算
+    img_np = np.array(img)
+    h, w = img_np.shape
+    st.image(img_np, caption="原图", use_column_width=True, channels="gray")
 
+    # ---------------------- 1. 空间图像滤波器对比 ----------------------
+    st.header("1. 空间滤波器对比（Box/Gaussian/Median/Sobel）")
+    filter_type = st.selectbox("选择滤波器类型", 
+                               ["Box均值滤波", "Gaussian高斯滤波", "Median中值滤波", "Sobel边缘检测"],
+                               key="filter_select")
+    kernel_size = st.slider("核大小", min_value=3, max_value=11, value=3, step=2, key="kernel_slider")
 
-translator = load_translator()
+    if st.button("应用滤波器", key="apply_filter_btn"):
+        with st.spinner("滤波计算中..."):
+            pad = kernel_size // 2
+            padded_img = np.pad(img_np, pad, mode="edge")  # 边缘填充，避免黑边
+            result = np.zeros_like(img_np, dtype=np.float32)
 
-# ---------------------- 基于规则的翻译词典 ----------------------
-# 基础英中词典，模拟早期机器翻译
-basic_dict = {
-    "I": "我",
-    "you": "你",
-    "he": "他",
-    "she": "她",
-    "it": "它",
-    "we": "我们",
-    "they": "他们",
-    "am": "是",
-    "is": "是",
-    "are": "是",
-    "was": "是",
-    "were": "是",
-    "have": "有",
-    "has": "有",
-    "do": "做",
-    "does": "做",
-    "did": "做",
-    "go": "去",
-    "went": "去",
-    "eat": "吃",
-    "ate": "吃",
-    "drink": "喝",
-    "drank": "喝",
-    "run": "跑",
-    "ran": "跑",
-    "walk": "走",
-    "walked": "走",
-    "like": "喜欢",
-    "likes": "喜欢",
-    "love": "爱",
-    "loves": "爱",
-    "cat": "猫",
-    "dog": "狗",
-    "rain": "下雨",
-    "cats": "猫",
-    "dogs": "狗",
-    "raining": "下雨",
-    "raining cats and dogs": "下猫下狗"  # 俚语的逐词保留
-}
+            if filter_type == "Box均值滤波":
+                # 均值滤波核
+                kernel = np.ones((kernel_size, kernel_size)) / (kernel_size ** 2)
+                for i in range(pad, h + pad):
+                    for j in range(pad, w + pad):
+                        region = padded_img[i-pad:i+pad+1, j-pad:j+pad+1]
+                        result[i-pad, j-pad] = np.sum(region * kernel)
 
+            elif filter_type == "Gaussian高斯滤波":
+                # 高斯核生成
+                sigma = 1.0
+                x, y = np.mgrid[-pad:pad+1, -pad:pad+1]
+                kernel = np.exp(-(x**2 + y**2) / (2 * sigma**2))
+                kernel /= kernel.sum()  # 归一化
+                for i in range(pad, h + pad):
+                    for j in range(pad, w + pad):
+                        region = padded_img[i-pad:i+pad+1, j-pad:j+pad+1]
+                        result[i-pad, j-pad] = np.sum(region * kernel)
 
-def rule_based_translate(sentence: str) -> str:
-    """基于词典的逐词直译"""
-    words = sentence.strip().split()
-    translated = []
-    for word in words:
-        # 处理标点
-        clean_word = word.strip(".,!?").lower()
-        if clean_word in basic_dict:
-            translated.append(basic_dict[clean_word])
-        else:
-            # 不在词典里的词直接保留
-            translated.append(word)
-    return " ".join(translated)
+            elif filter_type == "Median中值滤波":
+                for i in range(pad, h + pad):
+                    for j in range(pad, w + pad):
+                        region = padded_img[i-pad:i+pad+1, j-pad:j+pad+1]
+                        result[i-pad, j-pad] = np.median(region)
 
+            elif filter_type == "Sobel边缘检测":
+                # Sobel梯度核
+                kx = np.array([[-1, 0, 1], [-2, 0, 2], [-1, 0, 1]])
+                ky = np.array([[-1, -2, -1], [0, 0, 0], [1, 2, 1]])
+                gx, gy = np.zeros_like(img_np, dtype=np.float32), np.zeros_like(img_np, dtype=np.float32)
+                for i in range(1, h+1):
+                    for j in range(1, w+1):
+                        region = padded_img[i-1:i+2, j-1:j+2]
+                        gx[i-1, j-1] = np.sum(region * kx)
+                        gy[i-1, j-1] = np.sum(region * ky)
+                result = np.sqrt(gx**2 + gy**2)
 
-# ---------------------- 页面内容 ----------------------
-st.title("🌐 机器翻译对比与评测系统")
+            # 显示结果对比
+            fig, axes = plt.subplots(1, 2, figsize=(12, 5))
+            axes[0].imshow(img_np, cmap="gray")
+            axes[0].set_title("原图")
+            axes[0].axis("off")
+            axes[1].imshow(result, cmap="gray")
+            axes[1].set_title(f"{filter_type} 结果")
+            axes[1].axis("off")
+            st.pyplot(fig)
+
+    # ---------------------- 2. 图像梯度方向演示 ----------------------
+    st.header("2. 图像梯度方向计算（局部区域演示）")
+    # 让用户选择局部区域（简化为中心区域）
+    st.info("默认选取图像中心区域计算梯度，可直接观察方向分布")
+    if st.button("计算梯度方向", key="grad_btn"):
+        with st.spinner("计算梯度中..."):
+            # Sobel梯度计算
+            kx = np.array([[-1, 0, 1], [-2, 0, 2], [-1, 0, 1]])
+            ky = np.array([[-1, -2, -1], [0, 0, 0], [1, 2, 1]])
+            pad = 1
+            padded = np.pad(img_np, pad, mode="edge")
+            gx, gy = np.zeros_like(img_np, dtype=np.float32), np.zeros_like(img_np, dtype=np.float32)
+            
+            for i in range(pad, h+pad):
+                for j in range(pad, w+pad):
+                    region = padded[i-pad:i+pad+1, j-pad:j+pad+1]
+                    gx[i-pad, j-pad] = np.sum(region * kx)
+                    gy[i-pad, j-pad] = np.sum(region * ky)
+            
+            # 梯度幅值与方向
+            mag = np.sqrt(gx**2 + gy**2)
+            direction = np.arctan2(gy, gx) * 180 / np.pi  # 转为角度
+            
+            # 取中心局部区域
+            center_h, center_w = h//2, w//2
+            local_region = mag[center_h-50:center_h+50, center_w-50:center_w+50]
+            local_dir = direction[center_h-50:center_h+50, center_w-50:center_w+50]
+
+            fig, axes = plt.subplots(1, 3, figsize=(15, 5))
+            axes[0].imshow(img_np, cmap="gray")
+            axes[0].set_title("原图（中心区域为演示区）")
+            axes[0].axis("off")
+            axes[1].imshow(local_region, cmap="gray")
+            axes[1].set_title("局部区域梯度幅值")
+            axes[1].axis("off")
+            axes[2].imshow(local_dir, cmap="hsv")
+            axes[2].set_title("局部区域梯度方向（角度）")
+            axes[2].axis("off")
+            st.pyplot(fig)
+
+    # ---------------------- 3. 频域图像滤波（傅里叶变换） ----------------------
+    st.header("3. 频域变换与频谱分析（旋转/平移/缩放）")
+    if st.button("计算原图频谱", key="fft_btn"):
+        with st.spinner("傅里叶变换计算中..."):
+            # 傅里叶变换与频谱
+            fft = np.fft.fft2(img_np)
+            fft_shift = np.fft.fftshift(fft)
+            spectrum = 20 * np.log(np.abs(fft_shift) + 1)  # 对数增强，方便显示
+            
+            # 逆变换验证
+            ifft_img = np.fft.ifft2(np.fft.ifftshift(fft_shift)).real
+
+            fig, axes = plt.subplots(1, 3, figsize=(15, 5))
+            axes[0].imshow(img_np, cmap="gray")
+            axes[0].set_title("原图")
+            axes[0].axis("off")
+            axes[1].imshow(spectrum, cmap="gray")
+            axes[1].set_title("傅里叶频谱图")
+            axes[1].axis("off")
+            axes[2].imshow(ifft_img, cmap="gray")
+            axes[2].set_title("逆傅里叶变换结果")
+            axes[2].axis("off")
+            st.pyplot(fig)
+
+    # 频谱变化对比（旋转/平移/缩放）
+    if st.button("对比图像变换后的频谱变化", key="fft_compare_btn"):
+        with st.spinner("对比计算中..."):
+            # 1. 原图频谱
+            fft_orig = np.fft.fft2(img_np)
+            spec_orig = 20 * np.log(np.abs(np.fft.fftshift(fft_orig)) + 1)
+            
+            # 2. 旋转90度后的频谱
+            img_rot = np.rot90(img_np)
+            fft_rot = np.fft.fft2(img_rot)
+            spec_rot = 20 * np.log(np.abs(np.fft.fftshift(fft_rot)) + 1)
+            
+            # 3. 平移后的频谱（右移100像素）
+            img_shift = np.roll(img_np, 100, axis=1)
+            fft_shift = np.fft.fft2(img_shift)
+            spec_shift = 20 * np.log(np.abs(np.fft.fftshift(fft_shift)) + 1)
+
+            fig, axes = plt.subplots(1, 3, figsize=(15, 5))
+            axes[0].imshow(spec_orig, cmap="gray")
+            axes[0].set_title("原图频谱")
+            axes[0].axis("off")
+            axes[1].imshow(spec_rot, cmap="gray")
+            axes[1].set_title("旋转后频谱（旋转不变性）")
+            axes[1].axis("off")
+            axes[2].imshow(spec_shift, cmap="gray")
+            axes[2].set_title("平移后频谱（相位变化，幅度不变）")
+            axes[2].axis("off")
+            st.pyplot(fig)
+
 st.markdown("---")
-
-# 分三个模块的 Tab
-tab1, tab2, tab3 = st.tabs([
-    "模块1：神经机器翻译引擎",
-    "模块2：直译 vs. 意译对比",
-    "模块3：BLEU 自动评测"
-])
-
-# ---------------------- 模块1：神经机器翻译引擎 ----------------------
-with tab1:
-    st.header("🧠 神经机器翻译引擎 (NMT Engine)")
-    st.markdown("输入英文句子，体验基于 Transformer 的英译中效果。")
-
-    # 输入框
-    en_text = st.text_area(
-        "请输入英文句子：",
-        value="It rains cats and dogs.",
-        height=150
-    )
-
-    if st.button("开始翻译", key="btn1"):
-        with st.spinner("模型正在翻译中..."):
-            # 调用翻译模型
-            result = translator(en_text)[0]["translation_text"]
-            st.success("翻译完成！")
-            st.subheader("译文结果：")
-            st.info(result)
-
-# ---------------------- 模块2：直译 vs. 意译对比 ----------------------
-with tab2:
-    st.header("⚖️ 基于规则的直译 vs. 神经网络意译")
-    st.markdown("对比两种翻译范式的差异，观察基于规则翻译的局限性。")
-
-    # 输入框
-    en_text2 = st.text_area(
-        "请输入英文句子：",
-        value="It rains cats and dogs.",
-        height=150
-    )
-
-    if st.button("开始对比", key="btn2"):
-        with st.spinner("正在对比两种翻译结果..."):
-            # 1. 基于规则的直译
-            rule_trans = rule_based_translate(en_text2)
-            # 2. 神经机器翻译
-            nmt_trans = translator(en_text2)[0]["translation_text"]
-
-            # 并排展示
-            col1, col2 = st.columns(2)
-            with col1:
-                st.subheader("基于规则的直译")
-                st.warning(rule_trans)
-            with col2:
-                st.subheader("神经网络意译")
-                st.success(nmt_trans)
-
-# ---------------------- 模块3：BLEU 自动评测 ----------------------
-with tab3:
-    st.header("📊 机器翻译质量自动评测 (BLEU Score)")
-    st.markdown("输入待评测译文和参考译文，自动计算 BLEU 分数（0~1，越高越接近参考译文）。")
-
-    # 输入框
-    candidate_text = st.text_area("待评测译文（如 NMT 或直译结果）：", height=100)
-    reference_text = st.text_area("参考译文（人工翻译或标准译文）：", height=100)
-
-    if st.button("计算 BLEU 分数", key="btn3"):
-        if not candidate_text or not reference_text:
-            st.error("请输入待评测译文和参考译文！")
-        else:
-            # 分词
-            candidate = candidate_text.split()
-            reference = [reference_text.split()]  # 参考译文需要是列表的列表
-
-            # 计算 BLEU，带平滑函数避免零分
-            smoothie = SmoothingFunction().method4
-            bleu_score = sentence_bleu(reference, candidate, smoothing_function=smoothie)
-
-            st.success(f"BLEU 分数：{bleu_score:.4f}")
-            # 解释分数
-            if bleu_score >= 0.7:
-                st.info("✅ 译文质量优秀，与参考译文高度匹配")
-            elif bleu_score >= 0.4:
-                st.info("⚠️ 译文质量中等，部分内容与参考译文有差异")
-            else:
-                st.warning("❌ 译文质量较差，与参考译文差异较大")
-
-# ---------------------- 页脚 ----------------------
-st.markdown("---")
-st.markdown("© 2025 NLP 课程 Week 9 实验 | 机器翻译对比与评测系统")
+st.caption("模式识别与图像处理 - A2作业平台 | 无OpenCV依赖，Streamlit可直接部署")
